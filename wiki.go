@@ -1,15 +1,18 @@
 package main
 
 import (
+  "log"
   "io/ioutil"
   "net/http"
   "html/template"
   "strings"
   "regexp"
-  "errors"
   "github.com/gorilla/context"
   "github.com/gorilla/securecookie"
   "github.com/gorilla/sessions"
+  "database/sql"
+  _ "code.google.com/p/go-sqlite/go1/sqlite3"
+  "github.com/coopernurse/gorp"
 )
 
 type Page struct {
@@ -17,9 +20,37 @@ type Page struct {
   Body []byte
 }
 
-var validPath = regexp.MustCompile("^/(edit|save|view)/([a-zA-Z0-9]+)$")
+type CardBase struct {
+  Id    int64
+  Title string
+  Body  string
+  CardImage
+  CardExtra
+}
+
+type CardImage struct {
+  Id    int64
+  Path  string
+}
+
+type CardExtra struct {
+  Id   int64
+  Type string
+  Data string  
+}
+
+func newCard() Card {
+    return Post{
+        Created: time.Now().UnixNano(),
+        Title:   title,
+        Body:    body,
+    }
+}
+
+var valid_path = regexp.MustCompile("^/(edit|save|view)/([a-zA-Z0-9]+)$")
 var templates = template.Must(template.ParseFiles("templates/front.html", "templates/login.html", "templates/edit.html", "templates/view.html"))
 var store = sessions.NewCookieStore([]byte(securecookie.GenerateRandomKey(32)))
+var dbmap *gorp.DbMap
 
 func (p *Page) save() error {
   filename := "pages/" + strings.ToLower(p.Title) + ".txt"
@@ -33,15 +64,6 @@ func loadPage(title string) (*Page, error) {
     return nil, err
   }
   return &Page{Title: title, Body: body}, nil
-}
-
-func getTitle(w http.ResponseWriter, r *http.Request) (string, error) {
-  m := validPath.FindStringSubmatch(r.URL.Path)
-  if m == nil {
-    http.NotFound(w, r)
-    return "", errors.New("Invalid Page Title")
-  }
-  return m[2], nil
 }
 
 func renderTemplate(w http.ResponseWriter, tmpl string, p *Page) {
@@ -87,43 +109,65 @@ func saveHandler(w http.ResponseWriter, r *http.Request, title string) {
   http.Redirect(w, r, "/view/" + title, http.StatusFound)
 }
 
-func loginHandler(w http.ResponseWriter, r *http.Request) {
+func sessionHandler(w http.ResponseWriter, r *http.Request, action string) {
   //username, password := r.FormValue("username"), r.FormValue("password")
   //get user, check password hash here
   
   session, _ := store.Get(r, "the-session")
-  session.Values["user_id"] = securecookie.GenerateRandomKey(32)
-  session.Save(r, w)
-  http.Redirect(w, r, "/view/wat", http.StatusFound)
-}
-
-func logoutHandler(w http.ResponseWriter, r *http.Request) {
-  session, _ := store.Get(r, "the-session")
-  delete(session.Values, "user_id")
-  http.Redirect(w, r, "/", http.StatusFound)
+  
+  if action == "new" {
+    session.Values["user_id"] = securecookie.GenerateRandomKey(32)
+    session.Save(r, w)
+    redirect_path, ok := context.GetOk(r, "requested_path")
+    if !ok {
+      redirect_path = "front"
+    }
+    http.Redirect(w, r, redirect_path.(string), http.StatusFound)
+  } else if action == "destroy" {
+    delete(session.Values, "user_id")
+    http.Redirect(w, r, "/", http.StatusFound)
+  } else {
+    http.NotFound(w, r)
+  }
 }
 
 func makeHandler(fn func (http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
   return func(w http.ResponseWriter, r *http.Request) {
-    session, _ := store.Get(r, "the-session")
-    if session.Values["user_id"] == nil {
-      http.Redirect(w, r, "/login", http.StatusFound)
-    }
-    
-    m := validPath.FindStringSubmatch(r.URL.Path)
+    m := valid_path.FindStringSubmatch(r.URL.Path)
     if m == nil {
       http.NotFound(w, r)
       return
+    }
+    
+    session, _ := store.Get(r, "the-session")
+    if session.Values["user_id"] == nil {
+      context.Set(r, "requested_path", r.URL.Path)
+      http.Redirect(w, r, "/login", http.StatusFound)
     }
     
     fn(w, r, m[2])
   }
 }
 
+func initDb() *gorp.DbMap {
+  db, err := sql.Open("sqlite3", "card.db")
+  checkErr(err, "sql.Open failed")
+  dbmap := &gorp.DbMap{Db: db, Dialect: gorp.SqliteDialect{}}
+  return dbmap
+}
+
+func checkErr(err error, msg string) {
+  if err != nil {
+    log.Fatalln(msg, err)
+  }
+}
+
 func main() {
+  dbmap = initDb()
+  defer dbmap.Db.Close()
   http.HandleFunc("/", frontHandler)
   http.HandleFunc("/login", loginHandler)
-  http.HandleFunc("/sessions/new", sessionHandler)
+  http.HandleFunc("/session/", makeHandler(sessionHandler))
   http.HandleFunc("/view/", makeHandler(viewHandler))
   http.HandleFunc("/edit/", makeHandler(editHandler))
   http.HandleFunc("/save/", makeHandler(saveHandler))
