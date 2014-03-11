@@ -1,19 +1,20 @@
 package main
 
 import (
+  "github.com/robobluebird/cards"
   "log"
   "io/ioutil"
   "net/http"
   "html/template"
   "strings"
   "regexp"
+  "time"
   "github.com/gorilla/context"
   "github.com/gorilla/securecookie"
   "github.com/gorilla/sessions"
   "database/sql"
   _ "code.google.com/p/go-sqlite/go1/sqlite3"
   "github.com/coopernurse/gorp"
-  "bitbucket.org/liamstask/goose/cmd/goose"
 )
 
 type Page struct {
@@ -21,28 +22,8 @@ type Page struct {
   Body []byte
 }
 
-type CardBase struct {
-  Id      int64 `db:"card_id"`
-  Created int64
-  Title   string
-  Body    string
-  CardImage
-  CardExtra
-}
-
-type CardImage struct {
-  Id    int64  `db:"image_id"`
-  Path  string
-}
-
-type CardExtra struct {
-  Id   int64  `db:"extra_id"`
-  Type string
-  Data string  
-}
-
-func newCard(title string, body string) Card {
-    return Post{
+func newCard(title string, body string) cards.CardBase {
+    return cards.CardBase{
         Created: time.Now().UnixNano(),
         Title:   title,
         Body:    body,
@@ -156,9 +137,9 @@ func initDb() *gorp.DbMap {
   checkErr(err, "sql.Open failed")
   dbmap := &gorp.DbMap{Db: db, Dialect: gorp.SqliteDialect{}}
   
-  dbmap.AddTableWithName(Card{}, "cards").SetKeys(true, "Id")
-  dbmap.AddTableWithName(CardImage{}, "images").SetKeys(true, "Id")
-  dbmap.AddTableWithName(CardExtra{}, "extras").SetKeys(true, "Id")
+  dbmap.AddTableWithName(cards.CardBase{}, "cards").SetKeys(true, "Id")
+  dbmap.AddTableWithName(cards.CardImage{}, "images").SetKeys(true, "Id")
+  dbmap.AddTableWithName(cards.CardExtra{}, "extras").SetKeys(true, "Id")
   err = dbmap.CreateTablesIfNotExists()
   
   return dbmap
